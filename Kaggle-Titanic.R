@@ -9,7 +9,7 @@ library(scales)
 # Load data
 train <- read_csv('./input/train.csv')
 test <- read_csv('./input/test.csv')
-full <- bind_rows(train, test)
+full <- bind_rows(train=train, test=test, .id = 'dataset')
 
 # Feature Engineering
 ## Extract title from names
@@ -79,3 +79,37 @@ ggplot(data = filter(full, group_selector),
 ### Use median fare of this class group to fill the missing fare
 full$Fare[selector] <- full$Fare[group_selector] %>% median()
 full %>% is.na() %>% colSums()
+
+
+# Imputate other missing values, like Age
+## Convert what needs to be factors to factors
+full <- full %>% 
+    mutate_at(.funs = funs(as.factor),
+              .vars = c('dataset', "PassengerId", "Survived", 'Pclass', 'Sex', 'Embarked', 'Title', 'Surname', 'Family', 'FsizeD')
+             )
+## Use the 'mice' package to impute Age
+set.seed(129)
+unuseful_features <- c('PassengerId', 'Name', 'Ticket', 'Cabin', 'Family', 'Surname', 'Survived')
+mice_mod <- mice(full[, !names(full) %in% unuseful_features], method = 'rf')
+mice_output <- mice_mod %>% complete()
+### Plot age distributions, to see if mice_output appears normal
+par(mfrow=c(1,2))
+hist(full$Age, freq = F, main='Age: Original Data', col = 'darkgreen', ylim = c(0, 0.04))
+hist(mice_output$Age, freq = F, main = 'Age: MICE Output', col = 'lightgreen', ylim = c(0, 0.04))
+## Replace Age in full dataset with mice_output$Age
+full$Age <- mice_output$Age
+full$Age %>% is.na() %>% sum()
+
+# More Feature Engineering
+## Create a new feature of Adult/Child
+full <- full %>% mutate(Child=ifelse(Age<18, 'Child', 'Adult') %>% as.factor())
+table(full$Child, full$Survived)
+## Create a feature to denote Mother
+full <- full %>% mutate(Mother=(Sex=='female' & Parch>0 & Age>18 & Title!='Miss'))
+table(full$Mother, full$Survived)
+
+## Now we don't have any missing values except for Deck
+full %>% is.na() %>% colSums()
+
+
+
