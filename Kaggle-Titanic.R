@@ -113,3 +113,44 @@ full %>% is.na() %>% colSums()
 
 
 
+
+# MODELING
+## First split the full dataset into train and test sets
+train <- full %>% filter(dataset=='train') %>% select(-dataset)
+test  <- full %>% filter(dataset=='test')  %>% select(-dataset)
+
+## Build the random forest model
+set.seed(754)
+rf_model <- randomForest(factor(Survived) ~ Pclass + Sex + Age + SibSp + 
+                                            Parch + Fare + Embarked + Title + 
+                                            FsizeD + Child + Mother,
+                         data = train)
+par(mfrow=c(1,1))
+plot(rf_model, ylim=c(0, 0.36))
+legend('topright', colnames(rf_model$err.rate), col = 1:3, fill = 1:3)
+
+## Variable Importance
+importance <- importance(rf_model)
+varImportance <- data.frame(Variables = row.names(importance),
+                            Importance = round(importance[,'MeanDecreaseGini'], 2))
+rankImportance <- varImportance %>% 
+    mutate(Rank = dense_rank(desc(Importance))) %>% 
+    arrange(Rank)
+ggplot(data = rankImportance,
+       aes(x = reorder(Variables, Importance), y = Importance, fill=Importance)) +
+    geom_bar(stat = 'identity') +
+    geom_text(aes(x=Variables, y=0.5, label=paste0('#',Rank)), hjust=0, vjust=0.55, color='red') +
+    coord_flip()
+
+
+# PREDICTION
+pred <- predict(rf_model, test)
+solution <- tibble(PassengerId = test$PassengerId, Survived = pred)
+write_csv(solution, 'rf_mod_Solution.csv')
+
+
+
+
+
+
+
