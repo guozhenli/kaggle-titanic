@@ -1,0 +1,260 @@
+---
+title: "Kaggle Titanic"
+output: html_notebook
+---
+This is a replica of [Megan Risdal's post, Exploring Survival on the Titanic
+](https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic), with a bit more [tidyverse](https://www.tidyverse.org/) style to make the code clearer.
+
+# Load Packages and Data
+```{r message=FALSE, warning=FALSE}
+# Load packages
+library(tidyverse)
+library(mice)
+library(randomForest)
+library(stringr)
+library(scales)
+
+# Load data
+train <- read_csv('./input/train.csv');
+test <- read_csv('./input/test.csv');
+full <- bind_rows(train=train, test=test, .id = 'dataset');
+```
+
+# Feature Engineering
+## People's Titles
+#### Extract title from names
+```{r}
+full <- full %>% mutate(Title=str_replace_all(Name, '(.*, )|(\\..*)', ''))
+table(full$Sex, full$Title)
+```
+
+#### Duplicated titles
+Some titles mean the same thing, like Miss = Ms = Mlle, and Mme = Mrs. Combine them.
+```{r}
+full <- full %>% 
+    mutate_at(.vars = vars(Title), 
+              .funs = funs(ifelse(. %in% c('Mlle','Ms'), 'Miss', .))) %>% 
+    mutate_at(.vars = vars(Title),
+              .funs = funs(ifelse(. %in% c('Mme'), 'Mrs', .)))
+```
+
+#### Rare titles
+Some titles are quite rare. Combine them to one label, 'Rare Title'
+```{r}
+title_counts <- table(full$Title)
+rare_title <- names(title_counts)[title_counts<10]
+full <- full %>% mutate_at(.vars = vars(Title),
+                           .funs = funs(ifelse(. %in% rare_title, 'Rare Title', .)))
+table(full$Sex, full$Title)
+```
+
+
+## Families
+#### Family names
+Get family names from full names
+```{r}
+full$Surname <- full$Name %>% str_split('[,.]') %>% lapply('[[', 1) %>% unlist() %>% trimws()
+```
+
+
+#### Family size
+Get family sizes from counts of sibling, spouse, parents, and children
+```{r}
+full <- full %>% 
+    mutate(Fsize = SibSp + Parch +1) %>% 
+    mutate(Family = paste(Surname, Fsize, sep='_'))
+ggplot(data = subset(full, !is.na(Survived)),
+       aes(x = Fsize, fill=factor(Survived))) +
+    geom_bar(stat = 'count', position = 'dodge') +
+    scale_x_continuous(breaks = 1:11) +
+    labs(x = 'Family Size') 
+```
+
+#### Singleton, samll, and large families
+Categorize family sizes into 'singleton', 'small', and 'large'
+```{r}
+full <- full %>% mutate(FsizeD = case_when(
+    Fsize==1 ~ 'singleton',
+    Fsize>4 ~ 'large',
+    TRUE ~ 'small'
+))
+mosaicplot(table(full$FsizeD, full$Survived), main='Family Size vs Survival', shade = TRUE)
+
+```
+Looks like small families are more likely to survive.
+
+## Deck
+Deck information is available from the `Cabin` code
+```{r}
+full$Deck <-  full$Cabin %>% substr(1,1) %>% as.factor()
+```
+
+## Missing Values
+#### Count `NA`'s
+```{r}
+full %>% is.na() %>% colSums()
+```
+
+#### Missing `Embarked`
+```{r}
+selector <- full$Embarked %>% is.na()
+full[selector, ]
+```
+We can see that these two passengers with missing `Embarked` variables were in 1st class (`Pclass=1`), and both paid $80.
+Lets' take a look at what fare passengers from different embark point and different class paid.
+```{r message=FALSE, warning=FALSE}
+ggplot(data = subset(full, !selector),
+       aes(x=Embarked, y=Fare, fill=factor(Pclass))) +
+    geom_boxplot() +
+    scale_y_continuous()
+full %>% filter(!selector, Embarked=='C', Pclass==1) %>% select(Fare) %>% apply(2, median)
+```
+
+We can see that the fare these passengers paid ($80) is close to the median of what 1st class passengers from C paid, so we infer that they embarded from C (Cherbourg)
+```{r}
+full$Embarked[selector] <- 'C'
+full %>% is.na() %>% colSums()
+```
+
+#### Missing `Fare`
+There is a passenger with missing Fare
+```{r}
+selector <- full$Fare %>% is.na()
+full[selector,]
+```
+This is a 3rd class passenger embarked form `S`. The `Fare` distribution of this group of passengers is
+```{r}
+group_selector <- (!selector) & (full$Embarked=='S') & (full$Pclass==3)
+ggplot(data = filter(full, group_selector),
+       aes(x=Fare)) +
+    geom_density(fill='deepskyblue')
+```
+
+Use median fare of this class group to fill the missing fare
+```{r}
+full$Fare[selector] <- full$Fare[group_selector] %>% median()
+full %>% is.na() %>% colSums()
+
+```
+
+#### Missing `Age`
+Use the ['mice' package](https://cran.r-project.org/web/packages/mice/mice.pdf) to impute `Age`. MICE stands for Multivariate Imputation by Chained Equations.
+```{r include=FALSE}
+set.seed(129)
+unuseful_features <- c('PassengerId', 'Name', 'Ticket', 'Cabin', 'Family', 'Surname', 'Survived')
+mice_mod <- mice(full[, !names(full) %in% unuseful_features], method = 'rf')
+mice_output <- mice_mod %>% complete()
+```
+
+Plot age distributions, to see if `mice_output` appears normal
+```{r}
+par(mfrow=c(1,2))
+hist(full$Age, freq = F, main='Age: Original Data', col = 'darkgreen', ylim = c(0, 0.04))
+hist(mice_output$Age, freq = F, main = 'Age: MICE Output', col = 'lightgreen', ylim = c(0, 0.04))
+```
+Use `mice_output$Age` to replace `Age` in the original dataset.
+```{r}
+full$Age <- mice_output$Age
+full$Age %>% is.na() %>% sum()
+```
+
+## More new features
+#### Adult/child
+```{r}
+full <- full %>% mutate(Child=ifelse(Age<18, 'Child', 'Adult') %>% as.factor())
+table(full$Child, full$Survived)
+mosaicplot(.Last.value, shade=TRUE, main='Child/Adult vs. Survival')
+```
+
+#### Mother
+```{r}
+full <- full %>% mutate(Mother=(Sex=='female' & Parch>0 & Age>18 & Title!='Miss'))
+table(full$Mother, full$Survived)
+mosaicplot(.Last.value, shade=TRUE, main='Mother (T/F) vs. Survival')
+```
+
+
+Now we don't have any missing values except for `Cabin` and `Deck`
+```{r}
+full %>% is.na() %>% colSums()
+```
+
+## Final Cleaning: Strings to Factors
+```{r}
+cols <- c('Pclass', 'Sex', 'Embarked', 'Title', 'FsizeD', 'Child', 'Mother')
+full[cols] <- full[cols] %>% lapply(factor)
+sapply(full, class)
+```
+
+
+# Model
+## Train-test split
+Split the full dataset back into `train` and `test` sets
+```{r}
+train <- full %>% filter(dataset=='train') %>% select(-dataset)
+test  <- full %>% filter(dataset=='test')  %>% select(-dataset)
+```
+
+
+## Random Forrest model
+```{r}
+set.seed(754)
+rf_model <- randomForest(factor(Survived) ~ Pclass + Sex + Age + SibSp + 
+                                            Parch + Fare + Embarked + Title + 
+                                            FsizeD + Child + Mother,
+                         data = train)
+par(mfrow=c(1,1))
+plot(rf_model, ylim=c(0, 0.36))
+legend('topright', colnames(rf_model$err.rate), col = 1:3, fill = 1:3)
+```
+
+
+## Variable Importance
+```{r}
+importance <- importance(rf_model)
+varImportance <- data.frame(Variables = row.names(importance),
+                            Importance = round(importance[,'MeanDecreaseGini'], 2))
+rankImportance <- varImportance %>% 
+    mutate(Rank = dense_rank(desc(Importance))) %>% 
+    arrange(Rank)
+ggplot(data = rankImportance,
+       aes(x = reorder(Variables, Importance), y = Importance, fill=Importance)) +
+    geom_bar(stat = 'identity') +
+    geom_text(aes(x=Variables, y=0.5, label=paste0('#',Rank)), hjust=-1, vjust=0.55, color='red') +
+    coord_flip()
+```
+
+
+
+
+# Prediction
+```{r}
+pred <- predict(rf_model, test)
+solution <- tibble(PassengerId = test$PassengerId, Survived = pred)
+write_csv(solution, 'rf_mod_Solution.csv')
+```
+
+
+
+# Summary
+## Workflow Overview
+- Check data
+    - Shape
+    - Feature types (categorical/continuous)
+    - Missing values
+- Data cleaning + feature engineering
+- Modeling
+- Prediction
+
+## What can be learned
+- Feature engineering. E.g. extracting titles from names
+- Imputation of missing data: `mice`
+- Categorical features visualization with `mosaicplot()`
+
+## What can be improved
+- Model evaluation
+- Random forest parameter tuning
+
+
+
+
