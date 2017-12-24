@@ -1,6 +1,8 @@
 ---
 title: "Kaggle Titanic"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 This is a replica of [Megan Risdal's post, Exploring Survival on the Titanic
 ](https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic), with a bit more [tidyverse](https://www.tidyverse.org/) style to make the code clearer.
@@ -163,14 +165,14 @@ full$Age %>% is.na() %>% sum()
 ```{r}
 full <- full %>% mutate(Child=ifelse(Age<18, 'Child', 'Adult') %>% as.factor())
 table(full$Child, full$Survived)
-mosaicplot(.Last.value, shade=TRUE, main='Child/Adult vs. Survival')
+mosaicplot(table(full$Child, full$Survived), shade=TRUE, main='Child/Adult vs. Survival')
 ```
 
 #### Mother
 ```{r}
 full <- full %>% mutate(Mother=(Sex=='female' & Parch>0 & Age>18 & Title!='Miss'))
 table(full$Mother, full$Survived)
-mosaicplot(.Last.value, shade=TRUE, main='Mother (T/F) vs. Survival')
+mosaicplot(table(full$Mother, full$Survived), shade=TRUE, main='Mother (T/F) vs. Survival')
 ```
 
 
