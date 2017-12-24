@@ -1,8 +1,6 @@
 ---
 title: "Kaggle Titanic"
-output:
-  html_document:
-    df_print: paged
+output: html_notebook
 ---
 This is a replica of [Megan Risdal's post, Exploring Survival on the Titanic
 ](https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic), with a bit more [tidyverse](https://www.tidyverse.org/) style to make the code clearer.
